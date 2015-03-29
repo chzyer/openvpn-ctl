@@ -28,11 +28,25 @@ const (
 )
 
 type Flag struct {
-	VpnConf   string
-	IpRule    string
-	IpDown    string
-	IpUp      string
-	Reconnect string
+	VpnConf string
+	IpRule  string
+	IpDown  string
+	IpUp    string
+
+	PingHost string
+	PPPName  string
+}
+
+func NewFlag() *Flag {
+	f := new(Flag)
+	flag.StringVar(&f.VpnConf, "v", "/etc/openvpn/server.conf", "conf file path")
+	flag.StringVar(&f.IpRule, "i", "/etc/openvpn/ip.rule", "ip rule file path")
+	flag.StringVar(&f.IpUp, "up", "/etc/ppp/ip-up.d/openvpn", "ip up file path")
+	flag.StringVar(&f.IpDown, "dn", "/etc/ppp/ip-down.d/openvpn", "ip down file path")
+	flag.StringVar(&f.PPPName, "n", "", "pppd profile name")
+	flag.StringVar(&f.PingHost, "test", "173.252.120.6:80", "which host to test connected!")
+	flag.Parse()
+	return f
 }
 
 type IpLine struct {
@@ -245,17 +259,6 @@ func (l *IpLines) AppendsByFile(file string) error {
 	return nil
 }
 
-func NewFlag() *Flag {
-	f := new(Flag)
-	flag.StringVar(&f.VpnConf, "v", "/etc/openvpn/server.conf", "conf file path")
-	flag.StringVar(&f.IpRule, "i", "/etc/openvpn/ip.rule", "ip rule file path")
-	flag.StringVar(&f.IpUp, "up", "/etc/ppp/ip-up.d/openvpn", "ip up file path")
-	flag.StringVar(&f.IpDown, "dn", "/etc/ppp/ip-down.d/openvpn", "ip down file path")
-	flag.StringVar(&f.Reconnect, "r", "", "reconnect ppp0 if it's break!")
-	flag.Parse()
-	return f
-}
-
 func (f *Flag) ReadConf() ([]byte, error) {
 	data, err := ioutil.ReadFile(f.VpnConf)
 	if err != nil {
@@ -264,14 +267,44 @@ func (f *Flag) ReadConf() ([]byte, error) {
 	return data, nil
 }
 
-func CheckInterface(connectCmd string) {
-	for _ = range time.Tick(5 * time.Second) {
-		_, err := net.InterfaceByName("ppp0")
+// p-to-p protocol
+type PPP struct {
+	ProfName string
+}
+
+func (p *PPP) Connect() error {
+	logex.Error("try to connect ppp")
+	return exec.Command("pppd", "call", p.ProfName).Run()
+}
+
+func (p *PPP) Kill() error {
+	cmd := fmt.Sprintf("ps aux|grep -v grep|grep -v '%s'|grep 'pppd call'|awk '{print $2}'|xargs kill",
+		os.Args[0],
+	)
+	_, err := exec.Command("bash", "-c", cmd).CombinedOutput()
+	logex.Error("try to kill ppp")
+	return err
+}
+
+func (p *PPP) Reconnect(force bool) error {
+	if err := p.Kill(); err != nil {
+		logex.Error("kill error:", err)
+		if !force {
+			return err
+		}
+	}
+	return p.Connect()
+}
+
+func CheckHost(host string, ppp *PPP) {
+	for _ = range time.Tick(30 * time.Second) {
+		conn, err := net.DialTimeout("tcp", host, 5*time.Second)
+		if conn != nil {
+			conn.Close()
+		}
 		if err != nil {
-			logex.Error(err)
-			if connectCmd != "" {
-				exec.Command("bash", "-c", connectCmd).Run()
-			}
+			logex.Error("connect to ", host, " error:", err)
+			ppp.Reconnect(true)
 		}
 	}
 }
@@ -314,8 +347,10 @@ func main() {
 		//ipList.DumpRuleToFile((filePath string, prefix []byte, ipStyle IPStype))
 	}
 
+	ppp := &PPP{f.PPPName}
+
 	go func() {
-		CheckInterface(f.Reconnect)
+		CheckHost(f.PingHost, ppp)
 	}()
 
 	mux := http.NewServeMux()
@@ -368,6 +403,15 @@ func main() {
 		} else {
 			io.WriteString(w, "restarted!\n")
 		}
+	})
+
+	mux.HandleFunc("/reppp", func(w http.ResponseWriter, req *http.Request) {
+		err := ppp.Reconnect(true)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		io.WriteString(w, "reconnected ppp!\n")
 	})
 
 	// 一个要到/etc/ppp/ip-up
