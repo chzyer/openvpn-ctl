@@ -208,14 +208,14 @@ func (l IpLines) DumpRuleToFile(filePath string, prefix []byte, ipStyle IPStype)
 		f, err = os.Create(filePath)
 	}
 	if err != nil {
-		return logex.Track(err)
+		return logex.Trace(err)
 	}
 	defer f.Close()
 
 	if prefix != nil {
 		_, err = f.Write(prefix)
 		if err != nil {
-			return logex.Track(err)
+			return logex.Trace(err)
 		}
 	}
 
@@ -239,14 +239,14 @@ func (l IpLines) DumpRuleToFile(filePath string, prefix []byte, ipStyle IPStype)
 func (l *IpLines) AppendsByFile(file string) error {
 	data, err := ioutil.ReadFile(file)
 	if err != nil {
-		return logex.Track(err)
+		return logex.Trace(err)
 	}
 	r := bytes.NewBuffer(data)
 
 	for err == nil {
 		data, err = r.ReadBytes('\n')
 		if err != nil {
-			err = logex.Track(err)
+			err = logex.Trace(err)
 			continue
 		}
 		ip, err := NewIpLine(data)
@@ -296,7 +296,7 @@ func (p *PPP) Reconnect(force bool) error {
 	return p.Connect()
 }
 
-func CheckHost(host string, ppp *PPP) {
+func CheckHost(host string, ppp *PPP, ipList IpLines) {
 	for _ = range time.Tick(30 * time.Second) {
 		conn, err := net.DialTimeout("tcp", host, 5*time.Second)
 		if conn != nil {
@@ -305,8 +305,19 @@ func CheckHost(host string, ppp *PPP) {
 		if err != nil {
 			logex.Error("connect to ", host, " error:", err)
 			ppp.Reconnect(true)
+			EnsureRouter(ipList)
 		}
 	}
+}
+
+func EnsureRouter(ipList IpLines) []string {
+	ret := []string{}
+	for _, l := range ipList {
+		if err := l.Bind(); err != nil {
+			ret = append(ret, l.BindCmd()+":"+err.Error())
+		}
+	}
+	return ret
 }
 
 func main() {
@@ -350,7 +361,7 @@ func main() {
 	ppp := &PPP{f.PPPName}
 
 	go func() {
-		CheckHost(f.PingHost, ppp)
+		CheckHost(f.PingHost, ppp, ipList)
 	}()
 
 	mux := http.NewServeMux()
@@ -359,14 +370,8 @@ func main() {
 			w.Write([]byte(l.RouteString(false) + "\n"))
 		}
 	})
-	mux.handleFunc("/ensure_router", func(w http.ResponseWriter, req *http.Request) {
-		ret := []string{}
-		for _, l := range ipList {
-			if err := l.Bind(); err != nil {
-				ret = append(ret, l.BindCmd()+":"+err.Error())
-			}
-		}
-		return
+	mux.HandleFunc("/ensure_router", func(w http.ResponseWriter, req *http.Request) {
+		EnsureRouter(ipList)
 	})
 	mux.HandleFunc("/debug", func(w http.ResponseWriter, req *http.Request) {
 		b, _ := json.MarshalIndent(ipList, "", "\t")
