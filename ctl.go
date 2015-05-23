@@ -359,6 +359,15 @@ func main() {
 			w.Write([]byte(l.RouteString(false) + "\n"))
 		}
 	})
+	mux.handleFunc("/ensure_router", func(w http.ResponseWriter, req *http.Request) {
+		ret := []string{}
+		for _, l := range ipList {
+			if err := l.Bind(); err != nil {
+				ret = append(ret, l.BindCmd()+":"+err.Error())
+			}
+		}
+		return
+	})
 	mux.HandleFunc("/debug", func(w http.ResponseWriter, req *http.Request) {
 		b, _ := json.MarshalIndent(ipList, "", "\t")
 		w.Write(b)
