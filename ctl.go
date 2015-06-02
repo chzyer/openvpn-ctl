@@ -50,9 +50,10 @@ func NewFlag() *Flag {
 }
 
 type IpLine struct {
-	IP    []string // 127.0.0.1
-	IPStr string
-	Mask  int // 24
+	IP      []string // 127.0.0.1
+	IPStr   string
+	Mask    int // 24
+	Comment string
 }
 
 func (i IpLine) EqualIP(i2 IpLine) bool {
@@ -85,6 +86,9 @@ func (i IpLine) RouteString(net bool) string {
 	if net && i.Mask != 32 {
 		data = "-net " + data
 	}
+	if !net && i.Comment != "" {
+		data += " # " + i.Comment
+	}
 	return data
 }
 
@@ -114,6 +118,12 @@ func NewIpLine(data []byte) (l IpLine, err error) {
 	if data[len(data)-1] == '\n' {
 		data = data[:len(data)-1]
 	}
+	comment := ""
+
+	if idx := bytes.LastIndex(data, []byte{'#'}); idx > 0 {
+		data = bytes.TrimSpace(data[:idx])
+		comment = string(bytes.TrimSpace(data[idx+1:]))
+	}
 
 	mask := ""
 	// mask
@@ -142,6 +152,7 @@ func NewIpLine(data []byte) (l IpLine, err error) {
 
 	l.IPStr = ip.String()
 	l.IP = strings.Split(l.IPStr, ".")
+	l.Comment = comment
 	return
 }
 
@@ -396,11 +407,13 @@ func main() {
 	mux.HandleFunc("/add", func(w http.ResponseWriter, req *http.Request) {
 		query := req.URL.Query()
 		ip := query.Get("d")
+		comment := query.Get("domain")
 		il, err := NewIpLine([]byte(ip))
 		if err != nil {
 			http.Error(w, err.Error(), 400)
 			return
 		}
+		il.Comment = comment
 		err = ipList.Add(il)
 		if err == nil {
 			funcDump()
