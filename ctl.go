@@ -121,8 +121,8 @@ func NewIpLine(data []byte) (l IpLine, err error) {
 	comment := ""
 
 	if idx := bytes.LastIndex(data, []byte{'#'}); idx > 0 {
-		data = bytes.TrimSpace(data[:idx])
 		comment = string(bytes.TrimSpace(data[idx+1:]))
+		data = bytes.TrimSpace(data[:idx])
 	}
 
 	mask := ""
